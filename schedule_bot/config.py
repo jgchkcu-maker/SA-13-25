@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
 
 TARGET_GROUP = "СА-13-25"
 
@@ -20,31 +21,29 @@ def positive(name: str, default: int) -> int:
 
 @dataclass(frozen=True, repr=False)
 class Config:
-    api_id: int
-    api_hash: str
-    session: str
     bot_token: str
     chat_id: str
     source: str
     gemini_key: str
     model: str
     thread_id: int | None
-    lookback_days: int
+    start_at: datetime
     settle_seconds: int
 
     @classmethod
     def load(cls):
         thread = os.getenv("TELEGRAM_THREAD_ID", "").strip()
         return cls(
-            int(required("TELEGRAM_API_ID")),
-            required("TELEGRAM_API_HASH"),
-            required("TELEGRAM_SESSION"),
             required("TELEGRAM_BOT_TOKEN"),
             required("TELEGRAM_CHAT_ID"),
-            required("TELEGRAM_SOURCE"),
+            os.getenv("TELEGRAM_SOURCE", "@timetable_of_ak_sibsau"),
             required("GEMINI_API_KEY"),
             os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
             int(thread) if thread else None,
-            positive("INITIAL_LOOKBACK_DAYS", 3),
+            datetime.combine(
+                date.fromisoformat(os.getenv("START_DATE", "2026-10-18")),
+                time.min,
+                timezone(timedelta(hours=7)),
+            ),
             positive("ALBUM_SETTLE_SECONDS", 120),
         )

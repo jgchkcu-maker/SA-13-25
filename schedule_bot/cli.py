@@ -1,78 +1,63 @@
 import argparse
 import asyncio
-import getpass
 import logging
-import os
 import sys
 import tempfile
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from telethon import TelegramClient, utils
-from telethon.sessions import StringSession
 
 from .config import Config, required
 from .engine import Engine
+from .public_source import Source
 from .recognition import Recognizer
 from .state import make_store
-from .telegram import BotAPI, Source
-
-
-async def create_session(output: str):
-    api_id = int(os.getenv("TELEGRAM_API_ID") or input("Telegram api_id: "))
-    api_hash = os.getenv("TELEGRAM_API_HASH") or getpass.getpass("Telegram api_hash: ")
-    path = Path(output)
-    if path.exists():
-        raise ValueError("Файл уже существует; укажите другое имя")
-    client = TelegramClient(StringSession(), api_id, api_hash)
-    try:
-        await client.start(
-            phone=lambda: input("Номер телефона (+7...): "),
-            code_callback=lambda: getpass.getpass("Код из Telegram: "),
-            password=lambda: getpass.getpass("Пароль двухэтапной защиты: "),
-        )
-        with path.open("x", encoding="utf-8") as stream:
-            stream.write(client.session.save())
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-        print(f"Сессия сохранена в {path.resolve()}. Перенесите в GitHub Secret TELEGRAM_SESSION.")
-    finally:
-        await client.disconnect()
-
-
-async def dialogs():
-    client = TelegramClient(
-        StringSession(required("TELEGRAM_SESSION")),
-        int(required("TELEGRAM_API_ID")),
-        required("TELEGRAM_API_HASH"),
-    )
-    try:
-        await client.connect()
-        if not await client.is_user_authorized():
-            raise RuntimeError("Сессия не авторизована")
-        async for dialog in client.iter_dialogs():
-            if dialog.is_channel or dialog.is_group:
-                print(f"{utils.get_peer_id(dialog.entity)}\t{dialog.name}")
-    finally:
-        await client.disconnect()
+from .telegram import BotAPI
 
 
 async def execute(args):
-    if args.command == "session":
-        await create_session(args.output)
-        return
-    if args.command == "dialogs":
-        await dialogs()
-        return
     async with httpx.AsyncClient(timeout=60, follow_redirects=False) as http:
+        if args.command == "chat-id":
+            bot = BotAPI(http, required("TELEGRAM_BOT_TOKEN"), "")
+            username = (await bot.call("getMe", {}))["username"].lower()
+            updates = await bot.call(
+                "getUpdates",
+                {
+                    "timeout": 0,
+                    "limit": 100,
+                    "allowed_updates": ["message"],
+                },
+            )
+            answered = 0
+            for update in updates:
+                message = update.get("message", {})
+                command = message.get("text", "").split()
+                chat = message.get("chat", {})
+                if chat.get("type") not in ("group", "supergroup") or not command:
+                    continue
+                if command[0].lower() not in ("/chatid", f"/chatid@{username}"):
+                    continue
+                target = BotAPI(http, bot.token, str(chat["id"]), message.get("message_thread_id"))
+                await target.send(f"<b>ID этого чата</b>\n<code>{chat['id']}</code>")
+                answered += 1
+            if updates:
+                await bot.call(
+                    "getUpdates",
+                    {
+                        "offset": max(u["update_id"] for u in updates) + 1,
+                        "timeout": 0,
+                    },
+                )
+            print(f"Обработано команд /chatid: {answered}. ID отправлен в соответствующий чат.")
+            return
         store = make_store(http)
         if args.command == "init-state":
             await store.initialize()
             print("Состояние создано. Теперь можно запускать run.")
             return
+        if args.command == "run":
+            await store.ensure_initialized()
         state = await store.load()
         if args.command == "resolve":
             pending = state["pending"]
@@ -99,7 +84,19 @@ async def execute(args):
                 "group": "СА-13-25",
             }
             if state["scope"] and state["scope"] != scope:
-                raise RuntimeError("Источник/чат/тема изменены. Используйте отдельное состояние")
+                previous = state["scope"]
+                same_destination = all(
+                    previous.get(k) == scope[k] for k in ("chat", "thread", "group")
+                )
+                empty = not state["initialized"] and not state["posts"] and not state["pending"]
+                same_channel = bool(state["posts"]) and all(
+                    p.get("url", "").startswith(f"https://t.me/{source.username}/")
+                    for p in state["posts"].values()
+                )
+                if not (same_destination and (empty or same_channel)):
+                    raise RuntimeError(
+                        "Источник/чат/тема изменены. Используйте отдельное состояние"
+                    )
             state["scope"] = scope
             await store.save(state)
             bot = BotAPI(http, config.bot_token, config.chat_id, config.thread_id)
@@ -120,10 +117,8 @@ def main():
     parser = argparse.ArgumentParser(description="Изменения расписания СА-13-25")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run", help="Одна проверка канала")
+    sub.add_parser("chat-id", help="Ответить на /chatid в группе; нужен только токен бота")
     sub.add_parser("init-state", help="Однократное создание состояния, без отправки в Telegram")
-    sub.add_parser("dialogs", help="Локально вывести ID каналов и групп аккаунта")
-    session = sub.add_parser("session", help="Локально авторизовать аккаунт")
-    session.add_argument("--output", default="telegram-session.secret")
     resolve = sub.add_parser("resolve", help="Уточнить результат прерванной отправки")
     group = resolve.add_mutually_exclusive_group(required=True)
     group.add_argument("--message-id", type=int)
@@ -131,7 +126,7 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # Libraries may include secret-bearing URLs / extracted student data in diagnostics.
-    for name in ("httpx", "httpcore", "telethon", "google_genai", "google.genai"):
+    for name in ("httpx", "httpcore", "google_genai", "google.genai"):
         logging.getLogger(name).setLevel(logging.CRITICAL)
     try:
         asyncio.run(execute(args))

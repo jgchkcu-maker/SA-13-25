@@ -52,6 +52,10 @@ class LocalStore:
             raise RuntimeError("Состояние уже существует; перезапись запрещена")
         await self.save(empty_state())
 
+    async def ensure_initialized(self):
+        if not self.path.exists():
+            await self.initialize()
+
     async def save(self, state: dict):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(".tmp")
@@ -110,6 +114,22 @@ class GitHubStore:
             json={"ref": f"refs/heads/{self.branch}", "sha": ref["object"]["sha"]},
         )
         await self.save(empty_state())
+
+    async def ensure_initialized(self):
+        # Only a missing branch is a new installation. Missing/corrupt state in an
+        # existing branch must never reset the delivery history.
+        try:
+            response = await self.client.get(
+                f"https://api.github.com/repos/{self.repository}/git/ref/heads/"
+                + quote(self.branch, safe=""),
+                headers=self.headers,
+            )
+        except httpx.HTTPError:
+            raise RuntimeError("GitHub API недоступен; операция остановлена") from None
+        if response.status_code == 404:
+            await self.initialize()
+        elif response.status_code != 200:
+            raise RuntimeError(f"GitHub API: HTTP {response.status_code}; проверьте права")
 
     async def load(self) -> dict:
         data = await self.request("GET", "contents/state.json", params={"ref": self.branch})

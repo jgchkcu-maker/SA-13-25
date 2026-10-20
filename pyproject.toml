@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ak-schedule-bot"
-version = "1.0.0"
+version = "2.0.0"
 description = "Telegram schedule changes for СА-13-25"
 requires-python = ">=3.12"
 dependencies = [
-  "Telethon==1.45.0",
+  "beautifulsoup4==4.15.0",
   "google-genai==2.31.0",
   "cryptography==50.0.2",
   "httpx==0.28.1",
