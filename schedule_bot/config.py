@@ -56,7 +56,7 @@ class Config:
             models(),
             int(thread) if thread else None,
             datetime.combine(
-                date.fromisoformat(os.getenv("START_DATE", "2026-10-19")),
+                date.fromisoformat(os.getenv("START_DATE", "2026-10-18")),
                 time.min,
                 timezone(timedelta(hours=7)),
             ),
