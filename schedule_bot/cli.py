@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -21,35 +22,42 @@ async def execute(args):
         if args.command == "chat-id":
             bot = BotAPI(http, required("TELEGRAM_BOT_TOKEN"), "")
             username = (await bot.call("getMe", {}))["username"].lower()
-            updates = await bot.call(
-                "getUpdates",
-                {
-                    "timeout": 0,
-                    "limit": 100,
-                    "allowed_updates": ["message"],
-                },
-            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + int(os.getenv("CHAT_ID_WAIT_SECONDS", "300"))
             answered = 0
-            for update in updates:
-                message = update.get("message", {})
-                command = message.get("text", "").split()
-                chat = message.get("chat", {})
-                if chat.get("type") not in ("group", "supergroup") or not command:
-                    continue
-                if command[0].lower() not in ("/chatid", f"/chatid@{username}"):
-                    continue
-                target = BotAPI(http, bot.token, str(chat["id"]), message.get("message_thread_id"))
-                await target.send(f"<b>ID этого чата</b>\n<code>{chat['id']}</code>")
-                answered += 1
-            if updates:
-                await bot.call(
+            offset = None
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0 and answered:
+                    break
+                updates = await bot.call(
                     "getUpdates",
                     {
-                        "offset": max(u["update_id"] for u in updates) + 1,
-                        "timeout": 0,
+                        **({"offset": offset} if offset is not None else {}),
+                        "timeout": min(50, max(0, int(remaining))),
+                        "limit": 100,
+                        "allowed_updates": ["message"],
                     },
                 )
-            print(f"Обработано команд /chatid: {answered}. ID отправлен в соответствующий чат.")
+                for update in updates:
+                    offset = max(offset or 0, update["update_id"] + 1)
+                    message = update.get("message", {})
+                    command = message.get("text", "").split()
+                    chat = message.get("chat", {})
+                    if chat.get("type") not in ("group", "supergroup") or not command:
+                        continue
+                    if command[0].lower() not in ("/chatid", f"/chatid@{username}"):
+                        continue
+                    target = BotAPI(
+                        http, bot.token, str(chat["id"]), message.get("message_thread_id")
+                    )
+                    await target.send(f"<b>ID этого чата</b>\n<code>{chat['id']}</code>")
+                    answered += 1
+                if updates and offset is not None:
+                    await bot.call("getUpdates", {"offset": offset, "timeout": 0})
+                if answered or loop.time() >= deadline:
+                    break
+            print(f"Обработано команд /chatid: {answered}.")
             return
         store = make_store(http)
         if args.command == "init-state":
