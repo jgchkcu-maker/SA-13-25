@@ -95,7 +95,7 @@ class GitHubStore:
         try:
             response = await self.client.request(
                 method,
-                f"https://api.github.com/repos/{self.repository}/{path}",
+                (f"https://api.github.com/repos/{self.repository}/{path}" if path else f"https://api.github.com/repos/{self.repository}"),
                 headers=self.headers,
                 **kwargs,
             )
