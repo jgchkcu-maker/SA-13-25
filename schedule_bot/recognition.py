@@ -91,7 +91,18 @@ class Recognizer:
                     break
                 except errors.APIError as exc:
                     if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
-                        detail = " ".join((exc.message or "причина не указана").split())[:240]
+                        detail = " ".join((exc.message or "причина не указана").split())[:180]
+                        violations = []
+                        error = exc.details.get("error", exc.details) if isinstance(exc.details, dict) else {}
+                        for item in error.get("details", []) if isinstance(error, dict) else []:
+                            if not isinstance(item, dict):
+                                continue
+                            for violation in item.get("fieldViolations", []):
+                                field = violation.get("field")
+                                if isinstance(field, str):
+                                    violations.append(field[:160])
+                        if violations:
+                            detail = f"{detail}; поля: {', '.join(violations[:5])}"
                         raise RuntimeError(
                             f"Gemini API: ошибка {exc.code} ({exc.status}): {detail}"
                         ) from None
