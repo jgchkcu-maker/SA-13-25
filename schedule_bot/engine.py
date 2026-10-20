@@ -1,8 +1,9 @@
 import logging
+import re
 import time
 
 from .formatting import format_cards
-from .models import accepted_rows, row_key
+from .models import accepted_rows, digest, row_key
 from .telegram import DeliveryRejected
 
 log = logging.getLogger(__name__)
@@ -122,6 +123,12 @@ class Engine:
         )
         await self.save()
         log.info("Публикация %s: %s, принято строк: %d", publication.key, status, len(rows))
+        # Audit corrections without exposing teacher names or extracted schedule text.
+        if rows:
+            log.info(
+                "Контроль преподавателей: %s",
+                [digest(re.sub(r"[\W_]+", "", row["teacher"] or "").casefold()) for row in rows],
+            )
 
     async def run(self, publications, cursor):
         await self.recover()

@@ -101,3 +101,16 @@ def test_html_escape_and_length():
 
 def test_not_found_never_uses_rows():
     assert accepted_rows(Extraction(status="not_found", rows=[make_row()]), 1) == []
+
+
+def test_teacher_must_be_present_in_verified_evidence():
+    row = make_row(teacher="Соседний преподаватель")
+    rows = accepted_rows(Extraction(status="found", rows=[row]), 1)
+    assert rows[0]["teacher"] is None
+
+
+def test_teacher_punctuation_does_not_invalidate_literal_evidence():
+    row = make_row(teacher="Михайлова С. В.", evidence="СА-13-25 2 Математика Михайлова СВ 208")
+    assert (
+        accepted_rows(Extraction(status="found", rows=[row]), 1)[0]["teacher"] == "Михайлова С. В."
+    )

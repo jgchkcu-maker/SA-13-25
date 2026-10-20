@@ -77,6 +77,36 @@ async def test_edit_updates_existing_message(setup):
     assert "305" in bot.edited[0][1]
 
 
+async def test_teacher_correction_edits_sent_card_without_duplicate(setup):
+    engine, _, bot, ocr = setup
+    ocr.result = Extraction(
+        status="found",
+        rows=[
+            make_row(
+                teacher="Горохов ИВ",
+                evidence="СА-13-25 2 Математика Горохов ИВ 204",
+            )
+        ],
+    )
+    await engine.run([publication()], 1)
+    ocr.result = Extraction(
+        status="found",
+        rows=[
+            make_row(
+                teacher="Михайлова СВ",
+                evidence="СА-13-25 2 Математика Михайлова СВ 204",
+            )
+        ],
+    )
+    await engine.run([publication(revision="verified-v3")], 1)
+    await engine.run([publication(revision="verified-v3")], 1)
+    assert len(bot.sent) == 1
+    assert len(bot.edited) == 1
+    assert bot.edited[0][0] == 1
+    assert "Михайлова СВ" in bot.edited[0][1]
+    assert "Горохов ИВ" not in bot.edited[0][1]
+
+
 @pytest.mark.parametrize("status", ["not_found", "unreadable"])
 async def test_no_group_or_unreadable_initial_silent(setup, status):
     engine, _, bot, ocr = setup
