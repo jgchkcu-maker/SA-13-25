@@ -142,16 +142,22 @@ def main():
         # ValidationError contains raw model output; expose its type only.
         from pydantic import ValidationError
 
-        print(
+        fail(
             "Ошибка: неверный JSON распознавания"
             if isinstance(exc, ValidationError)
-            else f"Ошибка: {exc}",
-            file=sys.stderr,
+            else f"Ошибка: {exc}"
         )
-        raise SystemExit(1) from None
     except Exception as exc:
-        print(f"Ошибка: {type(exc).__name__}. Запуск остановлен; секреты скрыты.", file=sys.stderr)
-        raise SystemExit(1) from None
+        fail(f"Ошибка: {type(exc).__name__}. Запуск остановлен; секреты скрыты.")
+
+
+def fail(message: str):
+    print(message, file=sys.stderr)
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        # Annotation shows the reason on the run summary page; messages carry no secrets.
+        safe = " ".join(message.replace("%", "%25").split())
+        print("::error::" + safe)
+    raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
