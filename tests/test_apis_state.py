@@ -68,7 +68,7 @@ async def test_local_missing_corrupt_state_never_silently_resets(tmp_path):
 async def test_github_state_uses_sha_and_separate_branch():
     calls = []
     state = empty_state()
-    key = hashlib.sha256(b"session-secret").digest()
+    key = hashlib.sha256(b"state-encryption-key").digest()
     nonce = secrets.token_bytes(12)
     cipher = AESGCM(key)
     raw_state = json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode()
@@ -93,7 +93,7 @@ async def test_github_state_uses_sha_and_separate_branch():
         return httpx.Response(200, json={"content": {"sha": "new-sha"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        store = GitHubStore(http, "owner/repo", "secret", "bot-state", "session-secret")
+        store = GitHubStore(http, "owner/repo", "secret", "bot-state", "state-encryption-key")
         assert await store.load() == state
         await store.save(state)
         assert store.sha == "new-sha"
@@ -115,10 +115,10 @@ async def test_public_github_state_payload_is_encrypted_and_bound_to_session():
         return httpx.Response(200, json={"content": {"sha": "new-sha"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        store = GitHubStore(http, "owner/repo", "token", "bot-state", "session-secret")
+        store = GitHubStore(http, "owner/repo", "token", "bot-state", "state-encryption-key")
         await store.save(empty_state() | {"scope": {"group": "СА-13-25", "chat": "-100"}})
-        other = GitHubStore(http, "owner/repo", "token", "bot-state", "different-session")
-        with pytest.raises(ValueError, match="TELEGRAM_SESSION"):
+        other = GitHubStore(http, "owner/repo", "token", "bot-state", "wrong-encryption-key")
+        with pytest.raises(ValueError, match="STATE_ENCRYPTION_KEY"):
             await other.load()
     raw = base64.b64decode(saved["content"])
     assert b"СА-13-25" not in raw
