@@ -91,7 +91,8 @@ class Recognizer:
                     break
                 except errors.APIError as exc:
                     if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
-                        raise RuntimeError(f"Gemini API: ошибка {exc.code}") from None
+                        detail = " ".join((exc.message or "причина не указана").split())[:240]
+                        raise RuntimeError(f"Gemini API: ошибка {exc.code} ({exc.status}): {detail}") from None
                     time.sleep(2 ** (attempt + 1))
             if (
                 not response.candidates
