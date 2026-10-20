@@ -70,7 +70,7 @@ class GitHubStore:
                  branch: str, encryption_secret: str):
         self.client, self.repository, self.branch = client, repository, branch
         if not encryption_secret:
-            raise ValueError("TELEGRAM_SESSION нужна для шифрования состояния")
+            raise ValueError("STATE_ENCRYPTION_KEY нужен для шифрования состояния")
         self.cipher = AESGCM(hashlib.sha256(encryption_secret.encode()).digest())
         self.headers = {
             "Authorization": f"Bearer {token}",
@@ -118,7 +118,7 @@ class GitHubStore:
         try:
             plaintext = self.cipher.decrypt(nonce, ciphertext, self.AAD)
         except InvalidTag:
-            raise ValueError("Не удалось расшифровать состояние; проверьте TELEGRAM_SESSION") from None
+            raise ValueError("Не удалось расшифровать состояние; проверьте STATE_ENCRYPTION_KEY") from None
         state = validate_state(json.loads(plaintext))
         self.state_hash = hashlib.sha256(plaintext).hexdigest()
         return state
@@ -158,6 +158,6 @@ def make_store(client: httpx.AsyncClient):
             required("GITHUB_REPOSITORY"),
             required("GITHUB_TOKEN"),
             os.getenv("STATE_BRANCH", "bot-state"),
-            required("TELEGRAM_SESSION"),
+            required("STATE_ENCRYPTION_KEY"),
         )
     raise ValueError("STATE_BACKEND: ожидается local или github")
