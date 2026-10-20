@@ -1,0 +1,90 @@
+name: Schedule watcher
+
+on:
+  schedule:
+    # Every 20 minutes, shifted away from the busiest minute of the hour. UTC.
+    - cron: '7,27,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'run = check; initialize = first-time state setup; resolve = recovery'
+        type: choice
+        options: [run, initialize, resolve]
+        default: run
+      delivered_message_id:
+        description: 'resolve only: ID of the message actually delivered to the group'
+        type: string
+        required: false
+      confirm_not_delivered:
+        description: 'resolve only: I checked the group; the pending message was NOT delivered'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ak-schedule-state
+  cancel-in-progress: false
+
+jobs:
+  check:
+    # Only the default branch can send to the real group or modify state.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      STATE_BACKEND: github
+      STATE_BRANCH: bot-state
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_TOKEN: ${{ github.token }}
+      TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+      TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TELEGRAM_SOURCE: ${{ vars.TELEGRAM_SOURCE || '@timetable_of_ak_sibsau' }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash-lite' }}
+      INITIAL_LOOKBACK_DAYS: ${{ vars.INITIAL_LOOKBACK_DAYS || '3' }}
+      ALBUM_SETTLE_SECONDS: '120'
+      OPERATION: ${{ inputs.operation || 'run' }}
+      DELIVERED_MESSAGE_ID: ${{ inputs.delivered_message_id }}
+      CONFIRM_NOT_DELIVERED: ${{ inputs.confirm_not_delivered }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Check or manage state
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$OPERATION" in
+            initialize) schedule-bot init-state ;;
+            run) schedule-bot run ;;
+            resolve)
+              if [[ -n "$DELIVERED_MESSAGE_ID" && "$CONFIRM_NOT_DELIVERED" == "true" ]]; then
+                echo 'Choose exactly one recovery option.' >&2
+                exit 1
+              elif [[ "$DELIVERED_MESSAGE_ID" =~ ^[1-9][0-9]*$ ]]; then
+                schedule-bot resolve --message-id "$DELIVERED_MESSAGE_ID"
+              elif [[ -z "$DELIVERED_MESSAGE_ID" && "$CONFIRM_NOT_DELIVERED" == "true" ]]; then
+                schedule-bot resolve --confirm-not-delivered
+              else
+                echo 'Recovery requires a delivered message ID or explicit confirmation.' >&2
+                exit 1
+              fi
+              ;;
+            *) exit 1 ;;
+          esac
+
