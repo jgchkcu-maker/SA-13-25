@@ -25,12 +25,17 @@ def make_row(**kwargs):
     )
 
 
-@pytest.mark.parametrize("value", ["СА-13-25", "са 13 25", "CA-13/25", "СА1325", "(СА–13–25)"])
+@pytest.mark.parametrize(
+    "value",
+    ["СА-13-25", "са 13 25", "CA-13/25", "СА1325", "(СА–13–25)", "СА-13", "CA 13", "(СА-13)"],
+)
 def test_explicit_aliases(value):
     assert is_target(value)
 
 
-@pytest.mark.parametrize("value", ["СА-13", "СА-13-24", "СА-12-25", "СА-113-25", "АС-13-25"])
+@pytest.mark.parametrize(
+    "value", ["СА-13-24", "СА-12-25", "СА-113-25", "АС-13-25", "СА-130", "САС-13", "СА-1"]
+)
 def test_other_groups_rejected(value):
     assert not is_target(value)
 
@@ -91,3 +96,27 @@ def test_html_escape_and_length():
 
 def test_not_found_never_uses_rows():
     assert accepted_rows(Extraction(status="not_found", rows=[make_row()]), 1) == []
+
+
+def test_yearless_group_row_from_college_table_accepted():
+    row = make_row(
+        group_text="СА-13",
+        change_date="2026-10-19",
+        date_evidence="Изменения в расписании На 19.10.2026",
+        lesson="1",
+        subject="Иностранный язык",
+        teacher="Горохов ИВ",
+        room="201",
+        evidence="СА-13 1 Иностранный язык Горохов ИВ 201",
+    )
+    rows = accepted_rows(Extraction(status="found", rows=[row]), 4)
+    assert rows == [
+        {
+            "date": "2026-10-19",
+            "lesson": "1",
+            "subject": "Иностранный язык",
+            "teacher": "Горохов ИВ",
+            "room": "201",
+            "kind": "replacement",
+        }
+    ]

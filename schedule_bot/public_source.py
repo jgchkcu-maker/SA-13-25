@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from .models import digest
+from .models import RECOGNITION_VERSION, digest
 from .telegram import Publication
 
 log = logging.getLogger(__name__)
@@ -220,7 +220,9 @@ class Source:
                 images.append(path)
                 hashes.append(hashlib.sha256(content).hexdigest())
             count_images += len(images)
-            signature = digest([post.ids, post.date.isoformat(), post.caption, hashes])
+            signature = digest(
+                [post.ids, post.date.isoformat(), post.caption, hashes, RECOGNITION_VERSION]
+            )
             # Gemini is called only for new or edited posts: same text and photos are skipped,
             # including earlier unreadable results.
             if old and old.get("revision") == signature:

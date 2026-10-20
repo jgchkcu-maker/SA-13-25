@@ -7,6 +7,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Part of every post fingerprint: bump it to re-recognize all posts once after the
+# recognition rules change (2: the yearless group name СА-13 is accepted).
+RECOGNITION_VERSION = 2
+
 
 def normalize_group(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).upper().translate(str.maketrans("CA", "СА"))
@@ -14,8 +18,8 @@ def normalize_group(value: str) -> str:
 
 
 def is_target(value: str) -> bool:
-    # Only explicit, unambiguous aliases; СА-13 alone could refer to another cohort.
-    return normalize_group(value) == "СА1325"
+    # The college's tables name groups without the year ("СА-13"); another year is rejected.
+    return normalize_group(value) in {"СА1325", "СА13"}
 
 
 class Row(BaseModel):
