@@ -191,3 +191,27 @@ async def test_public_github_state_payload_is_encrypted_and_bound_to_key():
     raw = base64.b64decode(saved["content"])
     assert "СА-13-25".encode() not in raw
     assert json.loads(raw)["format"] == GitHubStore.FORMAT
+
+
+async def test_missing_state_branch_is_created_from_default_branch():
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path))
+        path = request.url.path
+        if path.endswith("/git/ref/heads/bot-state"):
+            return httpx.Response(404, json={})
+        if path == "/repos/owner/repo":
+            return httpx.Response(200, json={"default_branch": "main"})
+        if path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "abc"}})
+        if path.endswith("/git/refs"):
+            return httpx.Response(201, json={})
+        return httpx.Response(201, json={"content": {"sha": "new"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        store = GitHubStore(http, "owner/repo", "token", "bot-state", "state-encryption-key")
+        await store.ensure_initialized()
+    assert ("GET", "/repos/owner/repo") in calls
+    assert ("POST", "/repos/owner/repo/git/refs") in calls
+    assert calls[-1] == ("PUT", "/repos/owner/repo/contents/state.json")

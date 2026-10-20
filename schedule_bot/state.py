@@ -95,7 +95,8 @@ class GitHubStore:
         try:
             response = await self.client.request(
                 method,
-                f"https://api.github.com/repos/{self.repository}/{path}",
+                # The repository itself has no trailing slash: GitHub answers 404 to ".../repo/".
+                f"https://api.github.com/repos/{self.repository}" + (f"/{path}" if path else ""),
                 headers=self.headers,
                 **kwargs,
             )
