@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from .models import digest
+from .models import GROUP_MATCH_VERSION, digest
 from .telegram import Publication
 
 log = logging.getLogger(__name__)
@@ -220,7 +220,10 @@ class Source:
                 images.append(path)
                 hashes.append(hashlib.sha256(content).hexdigest())
             count_images += len(images)
-            signature = digest([post.ids, post.date.isoformat(), post.caption, hashes])
+            # Recheck earlier OCR decisions once when group matching rules change.
+            signature = digest(
+                [post.ids, post.date.isoformat(), post.caption, hashes, GROUP_MATCH_VERSION]
+            )
             retry = old and old.get("retry_after") and now.timestamp() >= old["retry_after"]
             if old and old.get("revision") == signature and not retry:
                 continue

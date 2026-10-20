@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+GROUP_MATCH_VERSION = 2
+
 
 def normalize_group(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).upper().translate(str.maketrans("CA", "СА"))
@@ -14,8 +16,8 @@ def normalize_group(value: str) -> str:
 
 
 def is_target(value: str) -> bool:
-    # Only explicit, unambiguous aliases; СА-13 alone could refer to another cohort.
-    return normalize_group(value) == "СА1325"
+    # The channel also uses the yearless alias for this group.
+    return normalize_group(value) in {"СА1325", "СА13"}
 
 
 class Row(BaseModel):
