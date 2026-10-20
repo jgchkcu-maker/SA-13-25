@@ -20,8 +20,12 @@ class Store:
 
 class Bot:
     def __init__(self):
-        self.sent, self.edited = [], []
+        self.sent, self.edited, self.photos = [], [], []
         self.crash_after_send = False
+
+    async def send_photos(self, paths, caption, reply_to):
+        self.photos.append((list(paths), caption, reply_to))
+        return [100 + len(self.photos)]
 
     async def send(self, text):
         self.sent.append(text)
@@ -53,6 +57,12 @@ def publication(key="post:1", revision="v1"):
     )
 
 
+@pytest.fixture(autouse=True)
+def image_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("test.jpg").write_bytes(b"photo-v1")
+
+
 @pytest.fixture
 def setup():
     store, bot, ocr = Store(), Bot(), OCR()
@@ -75,36 +85,6 @@ async def test_edit_updates_existing_message(setup):
     assert len(bot.sent) == 1
     assert bot.edited[0][0] == 1
     assert "305" in bot.edited[0][1]
-
-
-async def test_teacher_correction_edits_sent_card_without_duplicate(setup):
-    engine, _, bot, ocr = setup
-    ocr.result = Extraction(
-        status="found",
-        rows=[
-            make_row(
-                teacher="Горохов ИВ",
-                evidence="СА-13-25 2 Математика Горохов ИВ 204",
-            )
-        ],
-    )
-    await engine.run([publication()], 1)
-    ocr.result = Extraction(
-        status="found",
-        rows=[
-            make_row(
-                teacher="Михайлова СВ",
-                evidence="СА-13-25 2 Математика Михайлова СВ 204",
-            )
-        ],
-    )
-    await engine.run([publication(revision="verified-v3")], 1)
-    await engine.run([publication(revision="verified-v3")], 1)
-    assert len(bot.sent) == 1
-    assert len(bot.edited) == 1
-    assert bot.edited[0][0] == 1
-    assert "Михайлова СВ" in bot.edited[0][1]
-    assert "Горохов ИВ" not in bot.edited[0][1]
 
 
 @pytest.mark.parametrize("status", ["not_found", "unreadable"])
@@ -184,3 +164,60 @@ async def test_explicit_telegram_rejection_can_retry_without_manual_recovery(set
         await engine.run([publication()], 1)
     assert store.saved["pending"] is None
     assert store.saved["cursor"] == 0
+
+
+async def test_photos_attached_once_as_reply_to_text(setup):
+    engine, store, bot, _ = setup
+    await engine.run([publication()], 1)
+    assert bot.photos == [([Path("test.jpg")], "<b>Фото публикации</b>", 1)]
+    assert store.saved["posts"]["post:1"]["photos"]["ids"] == [101]
+    # A caption-only revision keeps the same photos: no second album.
+    await engine.run([publication(revision="v2")], 1)
+    assert len(bot.photos) == 1
+
+
+async def test_changed_photos_sent_again(setup):
+    engine, _, bot, _ = setup
+    await engine.run([publication()], 1)
+    Path("test.jpg").write_bytes(b"photo-v2")
+    await engine.run([publication(revision="v2")], 1)
+    assert bot.photos[1][1] == "<b>Обновлённые фото публикации</b>"
+
+
+async def test_no_photos_without_notification(setup):
+    engine, _, bot, ocr = setup
+    ocr.result = Extraction(status="not_found", rows=[])
+    await engine.run([publication()], 1)
+    assert bot.photos == []
+
+
+async def test_lost_photo_response_requires_resolve(setup):
+    engine, store, bot, _ = setup
+
+    async def crash(*_):
+        raise RuntimeError("Simulated lost HTTP response")
+
+    bot.send_photos = crash
+    with pytest.raises(RuntimeError):
+        await engine.run([publication()], 1)
+    assert store.saved["pending"]["kind"] == "photos"
+    restarted = Engine(store.saved, store, Bot(), OCR())
+    with pytest.raises(DeliveryUncertain):
+        await restarted.recover()
+    restarted.complete_pending(55)
+    assert restarted.state["posts"]["post:1"]["photos"]["ids"] == [55]
+
+
+async def test_rejected_photos_do_not_block_text(setup):
+    from schedule_bot.telegram import DeliveryRejected
+
+    engine, store, bot, _ = setup
+
+    async def rejected(*_):
+        raise DeliveryRejected("400")
+
+    bot.send_photos = rejected
+    await engine.run([publication()], 1)
+    assert len(bot.sent) == 1
+    assert store.saved["pending"] is None
+    assert store.saved["cursor"] == 1

@@ -52,6 +52,34 @@ async def test_bot_html_topic_and_idempotent_edit():
     assert calls[0]["link_preview_options"]["is_disabled"] is True
 
 
+async def test_bot_sends_album_in_chunks_as_reply(tmp_path):
+    calls = []
+
+    def handler(request):
+        method = request.url.path.rsplit("/", 1)[-1]
+        calls.append((method, request.content))
+        if method == "sendMediaGroup":
+            return httpx.Response(
+                200, json={"ok": True, "result": [{"message_id": i} for i in range(10)]}
+            )
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 99}})
+
+    paths = []
+    for i in range(11):
+        path = tmp_path / f"{i}.jpg"
+        path.write_bytes(b"jpeg")
+        paths.append(path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        bot = BotAPI(http, "token", "-100123", 55)
+        ids = await bot.send_photos(paths, "<b>Фото</b>", 7)
+    assert ids == [*range(10), 99]
+    assert [method for method, _ in calls] == ["sendMediaGroup", "sendPhoto"]
+    first = calls[0][1].decode()
+    assert "attach://photo9" in first and "message_thread_id" in first
+    assert '"message_id": 7' in first and "caption" in first
+    assert "caption" not in calls[1][1].decode()
+
+
 async def test_local_missing_corrupt_state_never_silently_resets(tmp_path):
     store = LocalStore(str(tmp_path / "state.json"))
     with pytest.raises(RuntimeError):

@@ -5,9 +5,8 @@ import httpx
 import pytest
 from google import genai
 from google.genai import types
-from test_models_formatting import make_row
 
-from schedule_bot.models import Extraction, accepted_rows
+from schedule_bot.models import Extraction
 from schedule_bot.recognition import Recognizer
 
 
@@ -39,7 +38,8 @@ async def test_real_sdk_request_contract(tmp_path, finish_reason):
         images=images, caption="table", published_at="2026-10-20T00:00:00Z"
     )
     recognizer = Recognizer.__new__(Recognizer)
-    recognizer.model = "gemini-3.5-flash-lite"
+    recognizer.models = ("gemini-3.5-flash-lite",)
+    recognizer.exhausted = set()
     recognizer.client = genai.Client(
         api_key="not-a-real-key",
         http_options=types.HttpOptions(
@@ -63,73 +63,67 @@ async def test_real_sdk_request_contract(tmp_path, finish_reason):
     assert "temperature" not in payload["generationConfig"]
 
 
-@pytest.mark.parametrize("review_case", ["corrected", "unclear", "wrong_lesson", "wrong_group"])
-async def test_teacher_is_independently_rechecked_on_original_image(tmp_path, review_case):
-    first = make_row(
-        group_text="СА-13",
-        teacher="Горохов ИВ",
-        room="208",
-        evidence="СА-13 2 Математика Горохов ИВ 208",
-    )
-    corrected = first.model_copy(
-        update={
-            "teacher": "Михайлова СВ",
-            "evidence": "СА-13 2 Математика Михайлова СВ 208",
-        }
-    )
-    if review_case == "unclear":
-        corrected = corrected.model_copy(update={"teacher": None})
-    elif review_case == "wrong_lesson":
-        corrected = corrected.model_copy(update={"lesson": "3"})
-    elif review_case == "wrong_group":
-        corrected = corrected.model_copy(update={"group_text": "СА-15"})
-    results = [
-        Extraction(status="found", rows=[first]),
-        Extraction(status="found", rows=[corrected]),
-    ]
-    requests = []
+async def test_model_pool_falls_back_on_quota_and_remembers(tmp_path):
+    called = []
 
     def handler(request):
-        result = results[len(requests)]
-        requests.append(json.loads(request.content))
+        model = request.url.path.rsplit("/", 1)[-1].split(":")[0]
+        called.append(model)
+        if model == "strong":
+            return httpx.Response(
+                429,
+                json={"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}},
+            )
+        if model == "middle":
+            return httpx.Response(
+                404, json={"error": {"code": 404, "message": "no model", "status": "NOT_FOUND"}}
+            )
         return httpx.Response(
             200,
             json={
                 "candidates": [
                     {
-                        "content": {"role": "model", "parts": [{"text": result.model_dump_json()}]},
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": '{"status":"not_found","rows":[]}'}],
+                        },
                         "finishReason": "STOP",
                     }
                 ]
             },
         )
 
-    path = tmp_path / "table.jpg"
-    path.write_bytes(b"test image bytes")
-    publication = SimpleNamespace(images=[path], caption="table", published_at="2026-10-20")
+    image = tmp_path / "1.jpg"
+    image.write_bytes(b"img")
+    publication = SimpleNamespace(images=[image], caption="", published_at="2026-10-20")
     recognizer = Recognizer.__new__(Recognizer)
-    recognizer.model = "gemini-3.5-flash-lite"
+    recognizer.models = ("strong", "middle", "lite")
+    recognizer.exhausted = set()
     recognizer.client = genai.Client(
         api_key="not-a-real-key",
         http_options=types.HttpOptions(
-            httpx_client=httpx.Client(transport=httpx.MockTransport(handler)),
-            api_version="v1beta",
+            httpx_client=httpx.Client(transport=httpx.MockTransport(handler)), api_version="v1beta"
         ),
     )
     try:
-        result = await recognizer.extract(publication)
+        await recognizer.extract(publication)
+        await recognizer.extract(publication)
+        recognizer.exhausted.add("lite")
+        with pytest.raises(RuntimeError, match="исчерпаны"):
+            await recognizer.extract(publication)
     finally:
         recognizer.close()
-    assert len(requests) == 2
-    assert "Горохов" not in json.dumps(requests[1], ensure_ascii=False)
-    assert "Михайлова" not in json.dumps(requests[1], ensure_ascii=False)
-    for request in requests:
-        thinking = request["generationConfig"]["thinkingConfig"]
-        assert thinking.get("thinkingLevel", thinking.get("thinking_level")).upper() == "HIGH"
-        assert any("inlineData" in part for part in request["contents"][0]["parts"])
-    rows = accepted_rows(result, 1)
-    if review_case in ("wrong_lesson", "wrong_group"):
-        assert result.status == "unreadable"
-        assert rows == []
-    else:
-        assert rows[0]["teacher"] == ("Михайлова СВ" if review_case == "corrected" else None)
+    # Exhausted models are not retried within the same run.
+    assert called == ["strong", "middle", "lite", "lite"]
+
+
+def test_model_pool_config(monkeypatch):
+    from schedule_bot.config import models
+
+    monkeypatch.delenv("GEMINI_MODELS", raising=False)
+    assert models() == ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+    monkeypatch.setenv("GEMINI_MODELS", " a, b ,a,, ")
+    assert models() == ("a", "b")
+    monkeypatch.setenv("GEMINI_MODELS", " , ")
+    with pytest.raises(ValueError):
+        models()

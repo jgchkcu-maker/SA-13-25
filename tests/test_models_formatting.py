@@ -30,19 +30,7 @@ def test_explicit_aliases(value):
     assert is_target(value)
 
 
-@pytest.mark.parametrize("value", ["СА-13", "са 13", "СА13", "CA-13", "(СА–13)", "СА.13"])
-def test_short_group_alias_reaches_notification(value):
-    row = make_row(group_text=value, evidence=f"{value} 2 Математика Иванова А. Б. 204")
-    rows = accepted_rows(Extraction(status="found", rows=[row]), 1)
-    assert is_target(value)
-    assert len(rows) == 1
-    assert "СА-13-25" in format_cards(rows, "https://t.me/example/1")[0]
-
-
-@pytest.mark.parametrize(
-    "value",
-    ["СА-13-24", "СА-13/26", "СА-12-25", "СА-113-25", "СА-113", "СА-13а", "АС-13-25"],
-)
+@pytest.mark.parametrize("value", ["СА-13", "СА-13-24", "СА-12-25", "СА-113-25", "АС-13-25"])
 def test_other_groups_rejected(value):
     assert not is_target(value)
 
@@ -101,16 +89,3 @@ def test_html_escape_and_length():
 
 def test_not_found_never_uses_rows():
     assert accepted_rows(Extraction(status="not_found", rows=[make_row()]), 1) == []
-
-
-def test_teacher_must_be_present_in_verified_evidence():
-    row = make_row(teacher="Соседний преподаватель")
-    rows = accepted_rows(Extraction(status="found", rows=[row]), 1)
-    assert rows[0]["teacher"] is None
-
-
-def test_teacher_punctuation_does_not_invalidate_literal_evidence():
-    row = make_row(teacher="Михайлова С. В.", evidence="СА-13-25 2 Математика Михайлова СВ 208")
-    assert (
-        accepted_rows(Extraction(status="found", rows=[row]), 1)[0]["teacher"] == "Михайлова С. В."
-    )

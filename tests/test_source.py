@@ -1,4 +1,3 @@
-import hashlib
 from datetime import UTC, datetime
 from types import SimpleNamespace as NS
 
@@ -6,7 +5,6 @@ import httpx
 import pytest
 
 from schedule_bot.config import Config
-from schedule_bot.models import digest
 from schedule_bot.public_source import Source, channel_username, parse_page
 from schedule_bot.state import empty_state
 
@@ -111,7 +109,7 @@ async def test_content_edits_and_signed_url_rotation(tmp_path):
             assert (await source.collect(state, tmp_path))[0]
 
 
-async def test_unreadable_retry_and_old_album_key_preserved(tmp_path):
+async def test_unchanged_post_skipped_and_old_album_key_preserved(tmp_path):
     def handler(req):
         if req.url.host.endswith("telesco.pe"):
             return httpx.Response(200, content=b"\xff\xd8\xffimage")
@@ -126,40 +124,11 @@ async def test_unreadable_retry_and_old_album_key_preserved(tmp_path):
                 "revision": first[0].fingerprint,
                 "retry_after": 1,
             }
-            retry, _ = await source.collect(state, tmp_path)
-            assert retry[0].key == "album:old"
-
-
-async def test_new_group_rules_recheck_previous_not_found_once(tmp_path):
-    def handler(req):
-        if req.url.host.endswith("telesco.pe"):
-            return httpx.Response(200, content=b"\xff\xd8\xffimage")
-        return httpx.Response(200, text=html())
-
-    state = empty_state()
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        async with Source(config(), client) as source:
-            first, _ = await source.collect(state, tmp_path)
-            post = first[0]
-            legacy_revision = digest(
-                [
-                    post.ids,
-                    post.published_at,
-                    post.caption,
-                    [hashlib.sha256(path.read_bytes()).hexdigest() for path in post.images],
-                ]
-            )
-            state["posts"][post.key] = {
-                "ids": post.ids,
-                "revision": legacy_revision,
-                "status": "not_found",
-                "pages": [],
-            }
-            changed, _ = await source.collect(state, tmp_path)
-            assert len(changed) == 1
-            assert changed[0].key == post.key
-            state["posts"][post.key]["revision"] = changed[0].fingerprint
+            # Legacy retry markers no longer trigger another paid recognition.
             assert (await source.collect(state, tmp_path))[0] == []
+            state["posts"]["album:old"]["revision"] = "edited"
+            edited, _ = await source.collect(state, tmp_path)
+            assert edited[0].key == "album:old"
 
 
 async def test_unsupported_and_fake_photos_do_not_advance_state(tmp_path):

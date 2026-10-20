@@ -1,6 +1,5 @@
+import hashlib
 import logging
-import re
-import time
 
 from .formatting import format_cards
 from .models import accepted_rows, digest, row_key
@@ -20,9 +19,14 @@ class Engine:
     async def save(self):
         await self.store.save(self.state)
 
-    def complete_pending(self, message_id: int):
+    def complete_pending(self, message_id: int | list[int]):
         pending = self.state["pending"]
         post = self.state["posts"][pending["post"]]
+        if pending["kind"] == "photos":
+            ids = message_id if isinstance(message_id, list) else [message_id]
+            post["photos"] = {"hash": pending["hash"], "ids": ids}
+            self.state["pending"] = None
+            return
         page = {"id": message_id, "text": pending["text"]}
         if pending["page"] < len(post["pages"]):
             post["pages"][pending["page"]] = page
@@ -34,9 +38,10 @@ class Engine:
         pending = self.state["pending"]
         if not pending:
             return
-        if pending["kind"] == "send":
+        if pending["kind"] in ("send", "photos"):
+            what = "фото публикации" if pending["kind"] == "photos" else "сообщения"
             raise DeliveryUncertain(
-                "Незавершённая отправка. Проверьте сообщение в группе и выполните resolve; "
+                f"Незавершённая отправка {what}. Проверьте группу и выполните resolve; "
                 "автоповтор отключён, чтобы исключить дубль."
             )
         message_id = await self.bot.edit(pending["message_id"], pending["text"])
@@ -80,6 +85,30 @@ class Engine:
             self.complete_pending(message_id)
             await self.save()
 
+    async def sync_photos(self, publication):
+        post = self.state["posts"][publication.key]
+        if not post["pages"] or not publication.images:
+            return
+        photo_hash = digest(
+            [hashlib.sha256(path.read_bytes()).hexdigest() for path in publication.images]
+        )
+        sent = post.get("photos")
+        if sent and sent["hash"] == photo_hash:
+            return
+        caption = "<b>Обновлённые фото публикации</b>" if sent else "<b>Фото публикации</b>"
+        self.state["pending"] = {"kind": "photos", "post": publication.key, "hash": photo_hash}
+        await self.save()
+        try:
+            ids = await self.bot.send_photos(publication.images, caption, post["pages"][0]["id"])
+        except DeliveryRejected:
+            # Text is the notification itself; photos are a supplement and must not block it.
+            log.warning(
+                "Telegram отклонил фото публикации %s; оставлен только текст", publication.key
+            )
+            ids = []
+        self.complete_pending(ids)
+        await self.save()
+
     async def process(self, publication):
         old = self.state["posts"].get(publication.key)
         revised = bool(old and old["pages"])
@@ -93,10 +122,8 @@ class Engine:
             # Source is photographic; do not invent schedule rows from text-only posts.
             rows, status = [], "not_found"
         if old is None:
-            old = {"ids": publication.ids, "pages": [], "fingerprint": "", "attempts": 0}
+            old = {"ids": publication.ids, "pages": [], "fingerprint": ""}
             self.state["posts"][publication.key] = old
-        same_revision = old.get("revision") == publication.fingerprint
-        attempts = old.get("attempts", 0) + 1 if same_revision else 1
         # Keep fingerprint uncommitted until all Telegram edits/sends finish, so interrupted
         # multi-page work is resumed. No cursor advancement on a failed publication.
         old.update(ids=publication.ids, url=publication.url)
@@ -112,23 +139,14 @@ class Engine:
             await self.sync_pages(
                 publication.key, format_cards([], publication.url, revised=True, uncertain=True)
             )
+        await self.sync_photos(publication)
         old.update(
             fingerprint=publication.metadata_fingerprint,
             revision=publication.fingerprint,
             status=status,
-            attempts=attempts,
-            retry_after=(
-                time.time() + 6 * 3600 if status == "unreadable" and attempts < 3 else None
-            ),
         )
         await self.save()
         log.info("Публикация %s: %s, принято строк: %d", publication.key, status, len(rows))
-        # Audit corrections without exposing teacher names or extracted schedule text.
-        if rows:
-            log.info(
-                "Контроль преподавателей: %s",
-                [digest(re.sub(r"[\W_]+", "", row["teacher"] or "").casefold()) for row in rows],
-            )
 
     async def run(self, publications, cursor):
         await self.recover()

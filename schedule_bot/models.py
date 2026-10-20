@@ -7,8 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-GROUP_MATCH_VERSION = 3
-
 
 def normalize_group(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).upper().translate(str.maketrans("CA", "СА"))
@@ -16,8 +14,8 @@ def normalize_group(value: str) -> str:
 
 
 def is_target(value: str) -> bool:
-    # The channel also uses the yearless alias for this group.
-    return normalize_group(value) in {"СА1325", "СА13"}
+    # Only explicit, unambiguous aliases; СА-13 alone could refer to another cohort.
+    return normalize_group(value) == "СА1325"
 
 
 class Row(BaseModel):
@@ -69,12 +67,6 @@ def accepted_rows(result: Extraction, image_count: int) -> list[dict]:
         if not re.fullmatch(r"(?:[1-9]|1[0-2])(?:\s*[-,/]\s*(?:[1-9]|1[0-2]))*", lesson):
             continue
         subject, teacher, room = map(clean, (row.subject, row.teacher, row.room))
-        # A populated teacher must also occur in the verified literal row transcript.
-        if teacher:
-            compact_teacher = re.sub(r"[\W_]+", "", teacher).casefold()
-            compact_evidence = re.sub(r"[\W_]+", "", row.evidence).casefold()
-            if not compact_teacher or compact_teacher not in compact_evidence:
-                teacher = None
         if not any((subject, teacher, room)) and row.kind != "cancelled":
             continue
         data = dict(

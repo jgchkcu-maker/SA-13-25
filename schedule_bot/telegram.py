@@ -1,4 +1,6 @@
 import asyncio
+import json
+import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,11 +27,13 @@ class BotAPI:
     def __init__(self, client: httpx.AsyncClient, token: str, chat_id: str, thread_id=None):
         self.client, self.token, self.chat_id, self.thread_id = client, token, chat_id, thread_id
 
-    async def call(self, method: str, payload: dict):
+    async def call(self, method: str, payload: dict, files: dict | None = None):
+        # Multipart requests take flat string fields; file contents are bytes, so retries reuse them.
+        body = {"data": payload, "files": files} if files else {"json": payload}
         for attempt in range(4):
             try:
                 response = await self.client.post(
-                    f"https://api.telegram.org/bot{self.token}/{method}", json=payload
+                    f"https://api.telegram.org/bot{self.token}/{method}", **body
                 )
                 data = response.json()
             except (httpx.HTTPError, ValueError):
@@ -67,6 +71,44 @@ class BotAPI:
         return (
             await self.call("editMessageText", {**self.payload(text), "message_id": message_id})
         )["message_id"]
+
+    async def send_photos(self, paths: list[Path], caption: str, reply_to: int | None) -> list[int]:
+        ids = []
+        # A media group holds 2-10 items; a lone photo in a chunk goes through sendPhoto.
+        for start in range(0, len(paths), 10):
+            chunk = paths[start : start + 10]
+            files = {
+                f"photo{i}": (
+                    path.name,
+                    path.read_bytes(),
+                    mimetypes.guess_type(path.name)[0] or "image/jpeg",
+                )
+                for i, path in enumerate(chunk)
+            }
+            payload = {"chat_id": self.chat_id, "disable_notification": "true"}
+            if self.thread_id:
+                payload["message_thread_id"] = str(self.thread_id)
+            if reply_to:
+                payload["reply_parameters"] = json.dumps(
+                    {"message_id": reply_to, "allow_sending_without_reply": True}
+                )
+            text = caption if start == 0 else None
+            if len(chunk) == 1:
+                if text:
+                    payload.update(caption=text, parse_mode="HTML")
+                result = await self.call(
+                    "sendPhoto", {**payload, "photo": "attach://photo0"}, files
+                )
+                ids.append(result["message_id"])
+                continue
+            media = [{"type": "photo", "media": f"attach://photo{i}"} for i in range(len(chunk))]
+            if text:
+                media[0].update(caption=text, parse_mode="HTML")
+            result = await self.call(
+                "sendMediaGroup", {**payload, "media": json.dumps(media)}, files
+            )
+            ids.extend(message["message_id"] for message in result)
+        return ids
 
     def payload(self, text):
         return {

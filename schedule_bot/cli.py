@@ -69,7 +69,7 @@ async def execute(args):
         state = await store.load()
         if args.command == "resolve":
             pending = state["pending"]
-            if not pending or pending["kind"] != "send":
+            if not pending or pending["kind"] not in ("send", "photos"):
                 raise ValueError("Нет неоднозначной отправки для подтверждения")
             engine = Engine(state, store, None, None)
             if args.message_id:
@@ -108,7 +108,7 @@ async def execute(args):
             state["scope"] = scope
             await store.save(state)
             bot = BotAPI(http, config.bot_token, config.chat_id, config.thread_id)
-            recognizer = Recognizer(config.gemini_key, config.model)
+            recognizer = Recognizer(config.gemini_key, config.models)
             try:
                 engine = Engine(state, store, bot, recognizer)
                 # Resolve interrupted edits before downloading or paying for OCR.

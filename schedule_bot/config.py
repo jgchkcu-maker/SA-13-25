@@ -19,13 +19,28 @@ def positive(name: str, default: int) -> int:
     return value
 
 
+# Strongest first. Free tier (AI Studio, Oct 2026): 3.8/3.6 Flash — 5 RPM, 20 RPD;
+# 3.5 Flash-Lite — 15 RPM, 500 RPD. Pro models are not available on the free tier.
+DEFAULT_MODELS = "gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash-lite"
+
+
+def models() -> tuple[str, ...]:
+    pool = tuple(
+        dict.fromkeys(m.strip() for m in os.getenv("GEMINI_MODELS", DEFAULT_MODELS).split(","))
+    )
+    pool = tuple(m for m in pool if m)
+    if not pool:
+        raise ValueError("GEMINI_MODELS: укажите хотя бы одну модель")
+    return pool
+
+
 @dataclass(frozen=True, repr=False)
 class Config:
     bot_token: str
     chat_id: str
     source: str
     gemini_key: str
-    model: str
+    models: tuple[str, ...]
     thread_id: int | None
     start_at: datetime
     settle_seconds: int
@@ -38,10 +53,10 @@ class Config:
             required("TELEGRAM_CHAT_ID"),
             os.getenv("TELEGRAM_SOURCE", "@timetable_of_ak_sibsau"),
             required("GEMINI_API_KEY"),
-            os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            models(),
             int(thread) if thread else None,
             datetime.combine(
-                date.fromisoformat(os.getenv("START_DATE", "2026-10-18")),
+                date.fromisoformat(os.getenv("START_DATE", "2026-10-19")),
                 time.min,
                 timezone(timedelta(hours=7)),
             ),
