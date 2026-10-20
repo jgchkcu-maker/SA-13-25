@@ -102,7 +102,7 @@ class GitHubStore:
         except httpx.HTTPError:
             raise RuntimeError("GitHub API недоступен; операция остановлена") from None
         if response.status_code >= 400:
-            raise RuntimeError(f"GitHub API: HTTP {response.status_code}; проверьте ветку и права")
+            raise RuntimeError(f"GitHub API ({method} {path or \"repository\"}): HTTP {response.status_code}; проверьте ветку и права")
         return response.json()
 
     async def initialize(self):
@@ -193,3 +193,4 @@ def make_store(client: httpx.AsyncClient):
             required("STATE_ENCRYPTION_KEY"),
         )
     raise ValueError("STATE_BACKEND: ожидается local или github")
+
