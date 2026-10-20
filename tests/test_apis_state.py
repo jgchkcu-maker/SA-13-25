@@ -121,5 +121,5 @@ async def test_public_github_state_payload_is_encrypted_and_bound_to_session():
         with pytest.raises(ValueError, match="STATE_ENCRYPTION_KEY"):
             await other.load()
     raw = base64.b64decode(saved["content"])
-    assert b"СА-13-25" not in raw
+    assert "СА-13-25".encode() not in raw
     assert json.loads(raw)["format"] == GitHubStore.FORMAT
