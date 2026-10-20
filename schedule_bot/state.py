@@ -66,8 +66,14 @@ class GitHubStore:
     FORMAT = "ak-schedule-state-aesgcm-v1"
     AAD = b"ak-schedule-bot:state:v1"
 
-    def __init__(self, client: httpx.AsyncClient, repository: str, token: str,
-                 branch: str, encryption_secret: str):
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        repository: str,
+        token: str,
+        branch: str,
+        encryption_secret: str,
+    ):
         self.client, self.repository, self.branch = client, repository, branch
         if not encryption_secret:
             raise ValueError("STATE_ENCRYPTION_KEY нужен для шифрования состояния")
@@ -118,24 +124,30 @@ class GitHubStore:
         try:
             plaintext = self.cipher.decrypt(nonce, ciphertext, self.AAD)
         except InvalidTag:
-            raise ValueError("Не удалось расшифровать состояние; проверьте STATE_ENCRYPTION_KEY") from None
+            raise ValueError(
+                "Не удалось расшифровать состояние; проверьте STATE_ENCRYPTION_KEY"
+            ) from None
         state = validate_state(json.loads(plaintext))
         self.state_hash = hashlib.sha256(plaintext).hexdigest()
         return state
 
     async def save(self, state: dict):
-        plaintext = json.dumps(validate_state(state), ensure_ascii=False,
-                               separators=(",", ":")).encode()
+        plaintext = json.dumps(
+            validate_state(state), ensure_ascii=False, separators=(",", ":")
+        ).encode()
         state_hash = hashlib.sha256(plaintext).hexdigest()
         if self.state_hash == state_hash:
             return
         nonce = secrets.token_bytes(12)
         ciphertext = self.cipher.encrypt(nonce, plaintext, self.AAD)
-        envelope = json.dumps({
-            "format": self.FORMAT,
-            "nonce": base64.b64encode(nonce).decode(),
-            "ciphertext": base64.b64encode(ciphertext).decode(),
-        }, separators=(",", ":"))
+        envelope = json.dumps(
+            {
+                "format": self.FORMAT,
+                "nonce": base64.b64encode(nonce).decode(),
+                "ciphertext": base64.b64encode(ciphertext).decode(),
+            },
+            separators=(",", ":"),
+        )
         payload = {
             "message": "Update schedule bot state [skip ci]",
             "branch": self.branch,

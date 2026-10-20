@@ -73,8 +73,11 @@ async def test_github_state_uses_sha_and_separate_branch():
     cipher = AESGCM(key)
     raw_state = json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode()
     encrypted = cipher.encrypt(nonce, raw_state, GitHubStore.AAD)
-    envelope = {"format": GitHubStore.FORMAT, "nonce": base64.b64encode(nonce).decode(),
-                "ciphertext": base64.b64encode(encrypted).decode()}
+    envelope = {
+        "format": GitHubStore.FORMAT,
+        "nonce": base64.b64encode(nonce).decode(),
+        "ciphertext": base64.b64encode(encrypted).decode(),
+    }
 
     def handler(request):
         calls.append(request)
@@ -96,27 +99,37 @@ async def test_github_state_uses_sha_and_separate_branch():
         store = GitHubStore(http, "owner/repo", "secret", "bot-state", "state-encryption-key")
         assert await store.load() == state
         await store.save(state)
-        assert store.sha == "new-sha"
+        assert store.sha == "old-sha"
         assert len(calls) == 1  # No no-op commits on the 20-minute schedule.
+        state["cursor"] = 42
+        await store.save(state)
+        assert store.sha == "new-sha"
+        assert len(calls) == 2
+        saved = json.loads(base64.b64decode(json.loads(calls[-1].content)["content"]))
+        recovered = cipher.decrypt(
+            base64.b64decode(saved["nonce"]), base64.b64decode(saved["ciphertext"]), GitHubStore.AAD
+        )
+        assert json.loads(recovered) == state
     assert calls[0].url.params["ref"] == "bot-state"
 
 
-async def test_public_github_state_payload_is_encrypted_and_bound_to_session():
+async def test_public_github_state_payload_is_encrypted_and_bound_to_key():
     saved = {}
 
     def handler(request):
         if request.method == "GET":
-            envelope = {"format": GitHubStore.FORMAT,
-                        "nonce": base64.b64encode(b"n" * 12).decode(),
-                        "ciphertext": base64.b64encode(b"c" * 40).decode()}
-            return httpx.Response(200, json={"sha": "old-sha", "encoding": "base64",
-                                               "content": base64.b64encode(json.dumps(envelope).encode()).decode()})
+            return httpx.Response(
+                200, json={"sha": "old-sha", "encoding": "base64", "content": saved["content"]}
+            )
         saved.update(json.loads(request.content))
         return httpx.Response(200, json={"content": {"sha": "new-sha"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         store = GitHubStore(http, "owner/repo", "token", "bot-state", "state-encryption-key")
-        await store.save(empty_state() | {"scope": {"group": "СА-13-25", "chat": "-100"}})
+        state = empty_state() | {"scope": {"group": "СА-13-25", "chat": "-100"}}
+        await store.save(state)
+        restored = GitHubStore(http, "owner/repo", "token", "bot-state", "state-encryption-key")
+        assert await restored.load() == state
         other = GitHubStore(http, "owner/repo", "token", "bot-state", "wrong-encryption-key")
         with pytest.raises(ValueError, match="STATE_ENCRYPTION_KEY"):
             await other.load()
