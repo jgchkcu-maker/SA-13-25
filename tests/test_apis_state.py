@@ -52,7 +52,7 @@ async def test_bot_html_topic_and_idempotent_edit():
     assert calls[0]["link_preview_options"]["is_disabled"] is True
 
 
-async def test_bot_sends_album_in_chunks_as_reply(tmp_path):
+async def test_bot_sends_captioned_album_in_chunks(tmp_path):
     calls = []
 
     def handler(request):
@@ -71,13 +71,40 @@ async def test_bot_sends_album_in_chunks_as_reply(tmp_path):
         paths.append(path)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         bot = BotAPI(http, "token", "-100123", 55)
-        ids = await bot.send_photos(paths, "<b>Фото</b>", 7)
+        ids = await bot.send_album(paths, "<b>Изменения</b>")
     assert ids == [*range(10), 99]
     assert [method for method, _ in calls] == ["sendMediaGroup", "sendPhoto"]
     first = calls[0][1].decode()
     assert "attach://photo9" in first and "message_thread_id" in first
-    assert '"message_id": 7' in first and "caption" in first
-    assert "caption" not in calls[1][1].decode()
+    assert "caption" in first and "reply_parameters" not in first
+    second = calls[1][1].decode()
+    assert "caption" not in second and "true" in second  # silent continuation
+
+
+async def test_bot_edits_album_photo_and_caption(tmp_path):
+    calls = []
+
+    def handler(request):
+        method = request.url.path.rsplit("/", 1)[-1]
+        calls.append((method, request.content))
+        if method == "editMessageCaption":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: message is not modified",
+                },
+            )
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 5}})
+
+    path = tmp_path / "1.jpg"
+    path.write_bytes(b"jpeg")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        bot = BotAPI(http, "token", "-100123")
+        assert await bot.edit_photo(5, path, "<b>Новое</b>") == 5
+        assert await bot.edit_caption(5, "<b>Новое</b>") == 5
+    assert calls[0][0] == "editMessageMedia" and "attach://photo0" in calls[0][1].decode()
 
 
 async def test_local_missing_corrupt_state_never_silently_resets(tmp_path):

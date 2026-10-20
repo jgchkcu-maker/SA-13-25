@@ -82,7 +82,9 @@ def test_html_escape_and_length():
     )
     cards = format_cards(rows, "https://t.me/example/1")
     assert len(cards) > 1
+    assert len(cards[0]) <= 1000
     assert all(len(card) <= 3500 for card in cards)
+    assert all("Продолжение" in card for card in cards[:-1])
     assert "A&amp;B &lt;b&gt;Test&lt;/b&gt;" in cards[0]
     assert "&lt;10&gt;" in cards[0]
 

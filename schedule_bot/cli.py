@@ -69,7 +69,7 @@ async def execute(args):
         state = await store.load()
         if args.command == "resolve":
             pending = state["pending"]
-            if not pending or pending["kind"] not in ("send", "photos"):
+            if not pending or pending["kind"] not in ("send", "album"):
                 raise ValueError("Нет неоднозначной отправки для подтверждения")
             engine = Engine(state, store, None, None)
             if args.message_id:

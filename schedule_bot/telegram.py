@@ -23,6 +23,10 @@ class Publication:
     images: list[Path]
 
 
+def photo_file(path: Path):
+    return path.name, path.read_bytes(), mimetypes.guess_type(path.name)[0] or "image/jpeg"
+
+
 class BotAPI:
     def __init__(self, client: httpx.AsyncClient, token: str, chat_id: str, thread_id=None):
         self.client, self.token, self.chat_id, self.thread_id = client, token, chat_id, thread_id
@@ -44,8 +48,8 @@ class BotAPI:
             if data.get("ok"):
                 return data["result"]
             description = data.get("description", "")
-            if method == "editMessageText" and "message is not modified" in description.lower():
-                return {"message_id": payload["message_id"]}
+            if method.startswith("edit") and "message is not modified" in description.lower():
+                return {"message_id": int(payload["message_id"])}
             if data.get("error_code") == 429 and attempt < 3:
                 wait = int(data.get("parameters", {}).get("retry_after", 5))
                 if wait <= 60:
@@ -72,26 +76,17 @@ class BotAPI:
             await self.call("editMessageText", {**self.payload(text), "message_id": message_id})
         )["message_id"]
 
-    async def send_photos(self, paths: list[Path], caption: str, reply_to: int | None) -> list[int]:
+    async def send_album(self, paths: list[Path], caption: str) -> list[int]:
+        """Photos with the notification as caption of the first one; returns all message IDs."""
         ids = []
         # A media group holds 2-10 items; a lone photo in a chunk goes through sendPhoto.
         for start in range(0, len(paths), 10):
             chunk = paths[start : start + 10]
-            files = {
-                f"photo{i}": (
-                    path.name,
-                    path.read_bytes(),
-                    mimetypes.guess_type(path.name)[0] or "image/jpeg",
-                )
-                for i, path in enumerate(chunk)
-            }
-            payload = {"chat_id": self.chat_id, "disable_notification": "true"}
+            files = {f"photo{i}": photo_file(path) for i, path in enumerate(chunk)}
+            # Only the captioned first chunk notifies; a continuation chunk is silent.
+            payload = {"chat_id": self.chat_id, "disable_notification": str(start > 0).lower()}
             if self.thread_id:
                 payload["message_thread_id"] = str(self.thread_id)
-            if reply_to:
-                payload["reply_parameters"] = json.dumps(
-                    {"message_id": reply_to, "allow_sending_without_reply": True}
-                )
             text = caption if start == 0 else None
             if len(chunk) == 1:
                 if text:
@@ -109,6 +104,30 @@ class BotAPI:
             )
             ids.extend(message["message_id"] for message in result)
         return ids
+
+    async def edit_caption(self, message_id: int, caption: str) -> int:
+        result = await self.call(
+            "editMessageCaption",
+            {
+                "chat_id": self.chat_id,
+                "message_id": message_id,
+                "caption": caption,
+                "parse_mode": "HTML",
+            },
+        )
+        return result["message_id"] if isinstance(result, dict) else message_id
+
+    async def edit_photo(self, message_id: int, path: Path, caption: str | None) -> int:
+        """Replace one photo of a sent album in place; caption is set on the first one only."""
+        media = {"type": "photo", "media": "attach://photo0"}
+        if caption is not None:
+            media.update(caption=caption, parse_mode="HTML")
+        result = await self.call(
+            "editMessageMedia",
+            {"chat_id": self.chat_id, "message_id": str(message_id), "media": json.dumps(media)},
+            {"photo0": photo_file(path)},
+        )
+        return result["message_id"] if isinstance(result, dict) else message_id
 
     def payload(self, text):
         return {
